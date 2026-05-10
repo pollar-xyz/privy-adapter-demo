@@ -1,0 +1,27 @@
+{
+  "name": "privy-adapter-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Demo deployment of @pollar/privy-adapter as a standalone HTTP service.",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "adapter:dev": "tsx watch src/adapter-server.ts",
+    "adapter:start": "node dist/adapter-server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@pollar/privy-adapter": "file:.yalc/@pollar/privy-adapter",
+    "dotenv": "^16.4.5",
+    "pino": "^9.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}
