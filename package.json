@@ -6,14 +6,17 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "adapter:dev": "tsx watch src/adapter-server.ts",
-    "adapter:start": "node dist/adapter-server.js"
+    "dev": "tsx watch src/adapter-server.ts",
+    "start": "node dist/adapter-server.js",
+    "dev:pull": "yalc add @pollar/react @pollar/core"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@pollar/privy-adapter": "file:.yalc/@pollar/privy-adapter",
+    "@pollar/core": "^0.6.0",
+    "@pollar/privy-adapter": "^0.6.2",
+    "@pollar/react": "^0.6.0",
     "dotenv": "^16.4.5",
     "pino": "^9.5.0",
     "zod": "^3.23.8"
