@@ -255,13 +255,56 @@ curl -s http://localhost:3001/wallets/did%3Aprivy%3Aabc123/address \
 - **Node.js ≥ 20**
 - **pnpm ≥ 9** (managed via `corepack`)
 - A **Privy app** (App ID + App Secret) for the customer
-- A **Pollar API Secret** — generated once by your team (≥ 32 random bytes), registered in the Pollar dashboard
+- A **Pollar API secret** issued by the Pollar hub dashboard for this adapter — see [Provisioning the Pollar API secret](#provisioning-the-pollar-api-secret) below
 
-Generate a `POLLAR_API_SECRET` locally:
+---
+
+## Provisioning the Pollar API secret
+
+`POLLAR_API_SECRET` is the bearer token Pollar's hub uses to authenticate every request it sends to this adapter. The hub stores only a hash of the secret; the adapter stores the plaintext.
+
+> **The plaintext value is issued by the Pollar hub dashboard and is displayed only once, at the moment of generation.** Treat it like any other long-lived credential: capture it on first issuance and persist it in a secret manager.
+
+### 1. Issue the secret from the hub dashboard
+
+1. Sign in to the Pollar hub dashboard and open the application this adapter will serve.
+2. Navigate to **Integrations → Wallets**.
+3. Select **Custom adapter (self-hosted)**.
+4. Enter the adapter's public URL (for example, `https://privy-adapter.example.com`) and select the target network (**Mainnet** or **Testnet**). The network must match `STELLAR_NETWORK` in the adapter's environment.
+5. Click **Save & generate secret**.
+6. Copy the plaintext value from the confirmation modal and store it immediately in your secret manager (1Password, Doppler, HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager, or equivalent).
+
+If the value is lost, use **Regenerate** on the same screen. Regeneration invalidates the previous secret as soon as the new one is issued — there is no grace period on the hub side.
+
+### 2. Configure the adapter
+
+Set the issued value as `POLLAR_API_SECRET` in the adapter's environment:
 
 ```bash
-openssl rand -hex 32
+# .env (local development) or your deployment platform's secret store
+POLLAR_API_SECRET=<value copied from the hub dashboard>
 ```
+
+Redeploy or restart the adapter so the new value is loaded into the process.
+
+### 3. Verify the connection
+
+In the hub dashboard's **Wallets** screen, click **Test connection**. The hub issues a `GET /health` against the registered adapter URL with `Authorization: Bearer <secret>` and reports the result.
+
+| Outcome             | Interpretation                                                                                                                            |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `200 OK`            | Secret matches and the adapter is reachable.                                                                                              |
+| `401 Unauthorized`  | The adapter is presenting a different secret than the hub stored. Re-check `POLLAR_API_SECRET` and confirm the adapter was redeployed after the change. |
+| Network error / 5xx | The registered adapter URL is unreachable or the service is unhealthy. Verify DNS, ingress rules, TLS termination, and process status.    |
+
+### Rotation
+
+1. Click **Regenerate** in the hub dashboard and copy the new plaintext value.
+2. Update `POLLAR_API_SECRET` in the adapter's secret store.
+3. Redeploy the adapter.
+4. Confirm the new value with **Test connection**.
+
+Because the previous secret is invalidated the moment a new one is issued, expect a brief window of `401`s during rotation. If your secret store supports staged or dual-value reads, schedule the rotation so the redeploy completes immediately after regeneration.
 
 ---
 
@@ -333,6 +376,68 @@ pnpm typecheck
 
 ## Smoke tests
 
+### Validating the Privy credentials directly
+
+Before bringing the adapter up end-to-end, you can verify that `PRIVY_APP_ID` and `PRIVY_APP_SECRET` are valid — and that Privy can actually mint a Stellar wallet for this app — by calling Privy's REST API directly. The request below creates a test user with a Stellar wallet via the [Privy Users API](https://docs.privy.io/api-reference/users/create):
+
+```bash
+curl -u "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
+  -X POST https://api.privy.io/v1/users \
+  -H "Content-Type: application/json" \
+  -H "privy-app-id: $PRIVY_APP_ID" \
+  -d '{
+    "linked_accounts": [
+      { "type": "custom_auth", "custom_user_id": "test-pollar-cuid-abc" }
+    ],
+    "wallets": [
+      { "chain_type": "stellar" }
+    ]
+  }'
+```
+
+> Privy requires **both** the Basic-auth pair (`-u $PRIVY_APP_ID:$PRIVY_APP_SECRET`) **and** the `privy-app-id` header. Omitting the header returns a `401` even when the credentials are correct.
+
+A successful response (`200`) looks like this — the embedded `wallet` entry under `linked_accounts` is the freshly-minted Stellar address:
+
+```json
+{
+  "id": "did:privy:cmp3i8ak902s70dl2g3gpnmqv",
+  "created_at": 1778643187,
+  "linked_accounts": [
+    {
+      "id": "s7bx625fxbisha6km7kyg4yr",
+      "type": "wallet",
+      "address": "GAPMNMLA2JS2DWYRQHZZZS3IMV7HFEQC47T53U76IVXC7VJZT7J2LDLP",
+      "chain_type": "stellar",
+      "wallet_client": "privy",
+      "connector_type": "embedded",
+      "imported": false,
+      "recovery_method": "privy-v2"
+    },
+    {
+      "type": "custom_auth",
+      "custom_user_id": "test-pollar-cuid-abc"
+    }
+  ],
+  "mfa_methods": [],
+  "has_accepted_terms": false,
+  "is_guest": false
+}
+```
+
+Expected outcomes:
+
+| Result                                         | Interpretation                                                                                       |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `200` / `201` with a JSON user payload         | Credentials are valid, Privy is reachable, and Stellar wallet provisioning is enabled for this app.  |
+| `401` / `403`                                  | `PRIVY_APP_ID` or `PRIVY_APP_SECRET` is wrong — the Basic-auth pair was rejected by Privy.           |
+| `400` with a Stellar / wallet validation error | Credentials are valid but the app is not configured to mint Stellar wallets — check the Privy dashboard. |
+| Connection error / DNS failure                 | Outbound egress to `https://api.privy.io` is blocked from this host.                                 |
+
+> The created user is real and will appear in the Privy dashboard. Use a disposable `custom_user_id` (rotate the suffix per run) and delete the user afterwards if you don't want it lingering.
+
+### Adapter-side probes
+
 With the adapter running on `:3001`:
 
 ```bash
@@ -383,7 +488,7 @@ The image includes a `HEALTHCHECK` against `GET /health`.
 - [ ] **Egress** allowlist includes `https://api.privy.io`.
 - [ ] **Ingress** restricted to Pollar's egress CIDR list once published.
 - [ ] **Readiness/liveness** probes pointed at `GET /health`.
-- [ ] **Adapter URL** + `POLLAR_API_SECRET` registered in the Pollar dashboard for this customer's application.
+- [ ] **Adapter URL** and network registered in the Pollar hub dashboard for this customer's application, and the issued `POLLAR_API_SECRET` loaded into the adapter's secret store.
 - [ ] **Network** value in the dashboard matches `STELLAR_NETWORK` here.
 - [ ] **"Test connection"** in the Pollar dashboard succeeds (Pollar hits `GET /health`).
 
